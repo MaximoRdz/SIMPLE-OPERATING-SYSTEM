@@ -1,6 +1,7 @@
 # Writing a Simple OS from Scratch — Study Notes
 > Following [Nick Blundell's *Writing a Simple Operating System from Scratch* (2010)](https://github.com/tpn/pdfs/blob/master/Writing%20a%20Simple%20Operating%20System%20from%20Scratch%20-%20Nick%20Blundell%20-%20Dec%202010.pdf)  
 > Companion simulator: [v86 — x86 emulator in the browser](https://copy.sh/v86/)
+> WSL: sudo apt install qemu-system-x86
 
 ## 16-bit Real Mode
 
@@ -255,4 +256,66 @@ C7 45 FC 00 80 0B 00    mov dword [ebp-0x4], 0xb8000
 
 > All pointers — regardless of what they point to — are the same size (4 bytes on 32-bit). The type (`char*`, `int*`, etc.) only tells the **compiler** how many bytes to read or write when dereferencing. The CPU sees only the address.
 
----
+
+## Writing, building and loading your kernel
+Recipe summary:
+1. write and compile the kernel code
+1. write and assemble the boot sector code
+1. create kernel image that includes: boot sector and compiled kernel
+1. load our kernel code into memory
+1. switch to 32-bit protected mode
+1. execute our kernel
+
+### Writing our Kernel
+From now on I'm using WSL (some extra flags are added to compile things to 32 bits from my 64 bits machine).
+```
+    gcc --freestanding -m32 -fno-pic -c kernel.c -o kernel.o
+    ld -m elf_i386 -o kernel.bin -Ttext 0x1000 --oformat binary kernel.o
+```
+The origin of our code, once loaded into memory, will be 0x1000. Thus local
+address references will be offseted from this origin.
+
+### Creating a boot sector to BOOTSTRAP our kernel
+* bootstrap: load and begin executing
+BIOS will load only the boot sector of our disk (512 bytes). We know that from
+BIOS we can use some routines to load extra data from the disk but as soon as we
+change to protected 32 bit mode we'd have to create our own disk drivers to do so!
+* **Kernel Image**: To avoid this issue kernel images gather both the boot sector
+ and the operating system kernel. This can vbe written to the initial sectors of
+ the boot disk such that the boot sector always points at the head of the kernel
+ image
+
+recall: nasm boot_sect.asm -f bin -o boot_sect.bin
+
+> `cat boot_sect.bin kernel.bin > os-image`
+
+qemu-system-i386 -fda os-image
+
+### Finding our way into the kernel
+currently the kernel is being loaded exactly at the memory address we specify and we call (jump and execute) this memory address
+when we have switch to 32-bit protected mode, but ... compiler could have altered the generated machine code oder, meaning that
+the `main`entry point could not be there or worst the entry point could be erronously pointing within an auxuliary function
+and return before ever reaching main...
+
+to be completely specific we have a problem with the absolute memory address the `main` function is going to have in this
+os-image binary. Hmm but didn't linker solve this? Exactly, linker takes object files and join them together thanks to the expressivity of
+the object file format that will keep the function name label on its information being able to resolve this "relative" label naming into
+an absolute memory address. Cool, let's create a kernel_entry.asm assemble it into an object (ELF executable and linking format option)
+linking together to the kernel.o object.
+
+`nasm kernel_entry.asm -f elf -o kernel_entry.o`
+`ld -m elf_i386 -o kernel.bin -Ttext 0x1000 --oformat binary kernel_entry.o kernel.o`
+this stays the same:
+`cat boot_sect.bin kernel.bin > os-image`
+
+### Using Makefile
+Dude, we have an awful amount of building commands...
+```
+    gcc --freestanding -m32 -fno-pic -c kernel.c -o kernel.o
+    nasm kernel_entry.asm -f elf -o kernel_entry.o
+    ld -m elf_i386 -o kernel.bin -Ttext 0x1000 --oformat binary kernel_entry.o kernel.o
+    nasm boot_sect.asm -f bin -o boot_sect.bin
+    cat boot_sect.bin kernel.bin > os-image
+    qemu-system-i386 -fda os-image
+```
+
