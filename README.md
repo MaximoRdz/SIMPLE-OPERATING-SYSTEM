@@ -1,6 +1,6 @@
 # Writing a Simple OS from Scratch — Study Notes
 > Following [Nick Blundell's *Writing a Simple Operating System from Scratch* (2010)](https://github.com/tpn/pdfs/blob/master/Writing%20a%20Simple%20Operating%20System%20from%20Scratch%20-%20Nick%20Blundell%20-%20Dec%202010.pdf)  
-> Companion simulator: [v86 — x86 emulator in the browser](https://copy.sh/v86/) \\
+> Companion simulator: [v86 — x86 emulator in the browser](https://copy.sh/v86/) \
 > WSL: sudo apt install qemu-system-x86
 
 ## 16-bit Real Mode
