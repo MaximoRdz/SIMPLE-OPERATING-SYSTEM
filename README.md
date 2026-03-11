@@ -318,4 +318,11 @@ Dude, we have an awful amount of building commands...
     cat boot_sect.bin kernel.bin > os-image
     qemu-system-i386 -fda os-image
 ```
+Special Makefile variables:
+- $^ is substituted with all of the target's dependency files
+- $< is the first dependency
+- $@ target file
+
+if make is run without target then the first target in the Makefile is run as
+the default -> usually you add a phoney target as `all:` to control this default behavior
 
