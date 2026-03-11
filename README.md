@@ -1,6 +1,6 @@
 # Writing a Simple OS from Scratch — Study Notes
 > Following [Nick Blundell's *Writing a Simple Operating System from Scratch* (2010)](https://github.com/tpn/pdfs/blob/master/Writing%20a%20Simple%20Operating%20System%20from%20Scratch%20-%20Nick%20Blundell%20-%20Dec%202010.pdf)  
-> Companion simulator: [v86 — x86 emulator in the browser](https://copy.sh/v86/)
+> Companion simulator: [v86 — x86 emulator in the browser](https://copy.sh/v86/) \\
 > WSL: sudo apt install qemu-system-x86
 
 ## 16-bit Real Mode
@@ -256,73 +256,118 @@ C7 45 FC 00 80 0B 00    mov dword [ebp-0x4], 0xb8000
 
 > All pointers — regardless of what they point to — are the same size (4 bytes on 32-bit). The type (`char*`, `int*`, etc.) only tells the **compiler** how many bytes to read or write when dereferencing. The CPU sees only the address.
 
+## Writing, Building and Loading Your Kernel
 
-## Writing, building and loading your kernel
 Recipe summary:
-1. write and compile the kernel code
-1. write and assemble the boot sector code
-1. create kernel image that includes: boot sector and compiled kernel
-1. load our kernel code into memory
-1. switch to 32-bit protected mode
-1. execute our kernel
+1. Write and compile the kernel code
+2. Write and assemble the boot sector code
+3. Create a kernel image that includes: boot sector + compiled kernel
+4. Load the kernel code into memory
+5. Switch to 32-bit protected mode
+6. Execute the kernel
 
-### Writing our Kernel
-From now on I'm using WSL (some extra flags are added to compile things to 32 bits from my 64 bits machine).
+### Writing the Kernel
+
+From now on I'm using WSL (extra flags are needed to compile to 32-bit from a 64-bit machine).
+
+```sh
+gcc --freestanding -m32 -fno-pic -c kernel.c -o kernel.o
+ld -m elf_i386 -o kernel.bin -Ttext 0x1000 --oformat binary kernel.o
 ```
-    gcc --freestanding -m32 -fno-pic -c kernel.c -o kernel.o
-    ld -m elf_i386 -o kernel.bin -Ttext 0x1000 --oformat binary kernel.o
-```
-The origin of our code, once loaded into memory, will be 0x1000. Thus local
-address references will be offseted from this origin.
 
-### Creating a boot sector to BOOTSTRAP our kernel
-* bootstrap: load and begin executing
-BIOS will load only the boot sector of our disk (512 bytes). We know that from
-BIOS we can use some routines to load extra data from the disk but as soon as we
-change to protected 32 bit mode we'd have to create our own disk drivers to do so!
-* **Kernel Image**: To avoid this issue kernel images gather both the boot sector
- and the operating system kernel. This can vbe written to the initial sectors of
- the boot disk such that the boot sector always points at the head of the kernel
- image
+The origin of our code, once loaded into memory, will be `0x1000`. All local address references will be offset from this origin.
 
-recall: nasm boot_sect.asm -f bin -o boot_sect.bin
+---
 
-> `cat boot_sect.bin kernel.bin > os-image`
+### Creating a Boot Sector to Bootstrap the Kernel
 
+> **Bootstrap**: load and begin executing.
+
+The BIOS will only load the boot sector of our disk (512 bytes). From the boot sector we can use BIOS routines to load extra data from disk — but as soon as we switch to 32-bit protected mode, we'd need to write our own disk drivers to do so.
+
+**Kernel Image**: To avoid this problem, kernel images bundle both the boot sector and the OS kernel together. This image is written to the initial sectors of the boot disk so that the boot sector always points to the head of the kernel image.
+
+```sh
+nasm boot_sect.asm -f bin -o boot_sect.bin
+cat boot_sect.bin kernel.bin > os-image
 qemu-system-i386 -fda os-image
-
-### Finding our way into the kernel
-currently the kernel is being loaded exactly at the memory address we specify and we call (jump and execute) this memory address
-when we have switch to 32-bit protected mode, but ... compiler could have altered the generated machine code oder, meaning that
-the `main`entry point could not be there or worst the entry point could be erronously pointing within an auxuliary function
-and return before ever reaching main...
-
-to be completely specific we have a problem with the absolute memory address the `main` function is going to have in this
-os-image binary. Hmm but didn't linker solve this? Exactly, linker takes object files and join them together thanks to the expressivity of
-the object file format that will keep the function name label on its information being able to resolve this "relative" label naming into
-an absolute memory address. Cool, let's create a kernel_entry.asm assemble it into an object (ELF executable and linking format option)
-linking together to the kernel.o object.
-
-`nasm kernel_entry.asm -f elf -o kernel_entry.o`
-`ld -m elf_i386 -o kernel.bin -Ttext 0x1000 --oformat binary kernel_entry.o kernel.o`
-this stays the same:
-`cat boot_sect.bin kernel.bin > os-image`
-
-### Using Makefile
-Dude, we have an awful amount of building commands...
 ```
-    gcc --freestanding -m32 -fno-pic -c kernel.c -o kernel.o
-    nasm kernel_entry.asm -f elf -o kernel_entry.o
-    ld -m elf_i386 -o kernel.bin -Ttext 0x1000 --oformat binary kernel_entry.o kernel.o
-    nasm boot_sect.asm -f bin -o boot_sect.bin
-    cat boot_sect.bin kernel.bin > os-image
-    qemu-system-i386 -fda os-image
+
+---
+
+### Finding Our Way Into the Kernel
+
+Currently the kernel is loaded at the memory address we specify, and we jump to that address after switching to 32-bit protected mode. But there's a subtle problem: **the compiler may reorder the generated machine code**, meaning the `main` entry point might not be at the very start of the binary — or worse, execution could land inside an auxiliary function and return before ever reaching `main`.
+
+More precisely: the issue is with the absolute memory address that `main` will have in the final `os-image` binary.
+
+*Didn't the linker solve this?* — Yes, and that's the key. The linker joins object files together and, thanks to the ELF format, retains function name labels and resolves them into absolute memory addresses. So the solution is to create a dedicated `kernel_entry.asm` that explicitly jumps to `main`, assemble it into an ELF object, and link it first.
+
+```sh
+nasm kernel_entry.asm -f elf -o kernel_entry.o
+ld -m elf_i386 -o kernel.bin -Ttext 0x1000 --oformat binary kernel_entry.o kernel.o
+cat boot_sect.bin kernel.bin > os-image   # unchanged
 ```
-Special Makefile variables:
-- $^ is substituted with all of the target's dependency files
-- $< is the first dependency
-- $@ target file
 
-if make is run without target then the first target in the Makefile is run as
-the default -> usually you add a phoney target as `all:` to control this default behavior
+---
 
+### Using a Makefile
+
+At this point we have quite a few build commands to manage:
+
+```sh
+gcc --freestanding -m32 -fno-pic -c kernel.c -o kernel.o
+nasm kernel_entry.asm -f elf -o kernel_entry.o
+ld -m elf_i386 -o kernel.bin -Ttext 0x1000 --oformat binary kernel_entry.o kernel.o
+nasm boot_sect.asm -f bin -o boot_sect.bin
+cat boot_sect.bin kernel.bin > os-image
+qemu-system-i386 -fda os-image
+```
+
+**Useful Makefile automatic variables:**
+
+| Variable | Meaning |
+|----------|---------|
+| `$^` | All dependency files for the current target |
+| `$<` | The first dependency |
+| `$@` | The target file |
+
+If `make` is run without a target, it executes the first target in the Makefile by default. It's common practice to add a phony `all:` target at the top to make this behavior explicit.
+
+---
+
+## Developing Drivers
+
+### Hardware I/O
+
+We've already encountered one form of hardware I/O: **memory-mapped I/O**, where writing a character to a specific memory address translates directly into the device's internal memory buffer (e.g. writing to the screen). But how do the CPU and hardware truly interact?
+
+**TFT monitors**: A screen is a matrix of backlit cells. An RGB screen has three sub-cells per pixel, each with a polarizing filter that passes only a specific light frequency. A liquid crystal layer sits between the cell and the backlight; an electric field controls how much light passes through. The hardware's job is to apply the correct electric field to each cell to reconstruct the desired image. This is handled by a dedicated **controller chip** on the device's motherboard. For backward compatibility, TFT monitors typically emulate older CRT monitors and can be driven by the motherboard's standard VGA controller.
+
+**I/O Buses**: Historically the CPU talked directly to each device — but as CPU speeds increased, the CPU would have to slow down to match slower peripherals. It's more practical for the CPU to issue I/O instructions to a high-speed **bus controller**, which then relays commands at a compatible rate to the appropriate device. This is the origin of the bus hierarchy found in modern computers.
+
+---
+
+### I/O Programming
+
+In Intel architecture, device controller registers are mapped into a dedicated **I/O address space** (separate from main memory). The `in`/`out` instructions are used to read and write them:
+
+```asm
+mov dx, 0x3f2     ; Must use DX to store the port address
+in  al, dx        ; Read port contents (e.g. DOR) into AL
+or  al, 00001000b ; Set the motor bit
+out dx, al        ; Write updated value back to the device
+```
+
+**Inline Assembly**: These low-level instructions can't be expressed directly in C, so GCC allows inline assembly snippets via `__asm__`:
+
+```c
+unsigned char port_byte_in(unsigned short port) {
+    // Reads a byte from the specified I/O port.
+    // "=a"(result) → store AL into `result` when done
+    // "d"(port)    → load `port` into EDX
+    unsigned char result;
+    __asm__("in %%dx, %%al" : "=a"(result) : "d"(port));
+    return result;
+}
+```
